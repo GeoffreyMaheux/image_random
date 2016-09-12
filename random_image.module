@@ -1,0 +1,205 @@
+<?php
+/**
+ * @file
+ * Create Random Image field formatter.
+ */
+
+/**
+ * Implements hook_entity_info_alter
+ */
+function random_image_entity_info_alter(&$entity_info) {
+  if (isset($entity_info['asset'])) {
+    $entity_info['asset']['view modes'] += array(
+      'random_image' => array(
+        'label' => t('Random Image'),
+        'custom settings' => TRUE,
+      ),
+    );
+  }
+}
+
+/**
+ * Implements hook_field_formatter_info().
+ * @return array
+ */
+function random_image_field_formatter_info() {
+  return array(
+    'random_image_entityreference'  => array(
+      'label'       => t('Random image'),
+      'field types' => array('entityreference'),
+      'settings'    => array(
+        'view_mode' => '',
+        'links'     => FALSE,
+      ),
+    ),
+    'random_image_image'            => array(
+      'label'       => t('Random image'),
+      'field types' => array('image'),
+      'settings'    => array(
+        'image_style' => '',
+        'image_link'  => '',
+      ),
+    ),
+  );
+}
+
+/**
+ * Implements hook_field_formatter_settings_form().
+ */
+function random_image_field_formatter_settings_form($field, $instance, $view_mode, $form, &$form_state) {
+  $display = $instance['display'][$view_mode];
+  $element = array();
+
+  switch ($display['type']) {
+    case 'random_image_entityreference':
+      // To do not duplicate code and use settings for formatter from
+      // entityreference module we need to change the display type by :
+      // entityreference_entity_view.
+      $instance['display'][$view_mode]['type'] = 'entityreference_entity_view';
+      $element = entityreference_field_formatter_settings_form($field, $instance, $view_mode, $form, $form_state);
+      break;
+
+    case 'random_image_image':
+      // For image field type we use settings form formatter from image module.
+      $element = image_field_formatter_settings_form($field, $instance, $view_mode, $form, $form_state);
+      break;
+  }
+
+  return $element;
+}
+
+/**
+ * Implements hook_field_formatter_settings_summary().
+ */
+function random_image_field_formatter_settings_summary($field, $instance, $view_mode) {
+  $display = $instance['display'][$view_mode];
+  $settings = $display['settings'];
+  $summary = array();
+
+  switch ($display['type']) {
+    case 'random_image_entityreference':
+      $entity_info = entity_get_info($field['settings']['target_type']);
+      $summary[] = t('Rendered as @mode', array('@mode' => isset($entity_info['view modes'][$settings['view_mode']]['label']) ? $entity_info['view modes'][$settings['view_mode']]['label'] : $settings['view_mode']));
+      $summary[] = !empty($settings['links']) ? t('Display links') : t('Do not display links');
+      break;
+
+    case 'random_image_image':
+      $summary[] = t('Image style : @image_style', array('@image_style' => $settings['image_style']));
+      $summary[] = !empty($settings['image_link']) ? t('Display link as @image_link', array('@image_link' => $settings['image_link'])) : t('Do not display links');
+      break;
+  }
+
+  return implode('<br />', $summary);
+}
+
+
+/**
+ * Implements hook_field_formatter_prepare_view().
+ */
+function random_image_field_formatter_prepare_view($entity_type, $entities, $field, $instances, $langcode, &$items, $displays) {
+  $target_ids = array();
+
+  foreach ($displays as $display) {
+    switch ($display['type']) {
+      case'random_image_entityreference':
+        // Collect every possible entity attached to any of the entities.
+        foreach ($entities as $id => $entity) {
+          foreach ($items[$id] as $delta => $item) {
+            if (isset($item['target_id'])) {
+              $target_ids[] = $item['target_id'];
+            }
+          }
+        }
+
+        if ($target_ids) {
+          $target_entities = entity_load($field['settings']['target_type'], $target_ids);
+        }
+        else {
+          $target_entities = array();
+        }
+
+        // Iterate through the fieldable entities again to attach the loaded data.
+        foreach ($entities as $id => $entity) {
+          $rekey = FALSE;
+
+          foreach ($items[$id] as $delta => $item) {
+            // Check whether the referenced entity could be loaded.
+            if (isset($target_entities[$item['target_id']])) {
+              // Replace the instance value with the target data.
+              $items[$id][$delta]['entity'] = $target_entities[$item['target_id']];
+              // Check whether the user has access to the referenced entity.
+              $items[$id][$delta]['access'] = entity_access('view', $field['settings']['target_type'], $target_entities[$item['target_id']]);
+            }
+            // Otherwise, unset the instance value, since the entity does not exist.
+            else {
+              unset($items[$id][$delta]);
+              $rekey = TRUE;
+            }
+          }
+
+          if ($rekey) {
+            // Rekey the items array.
+            $items[$id] = array_values($items[$id]);
+          }
+        }
+        break;
+    }
+  }
+}
+
+/**
+ * Implements hook_field_formatter_view().
+ */
+function random_image_field_formatter_view($entity_type, $entity, $field, $instance, $langcode, $items, $display) {
+  $result = array();
+  $settings = $display['settings'];
+
+  // Check if items has more than one element before to select a random element.
+  if (count($items) > 1) {
+    // Prepare the random selected element.
+    if (isset($_SESSION['random_image'][$display['type']])) {
+      unset($items[$_SESSION['random_image'][$display['type']]]);
+    }
+
+    // Rand the array key value of one element.
+    $random = array_rand($items, 1);
+
+    // Save in session the value of this key by display type.
+    $_SESSION['random_image'][$display['type']] = $random;
+
+    // Keep the value of this element before to unset items data.
+    $values = $items[$random];
+    unset($items);
+
+    // Inject in new items array the value of the randon element.
+    $items[$random] = $values;
+  }
+
+  switch ($display['type']) {
+    case 'random_image_entityreference':
+      // Rebuild the items list to contain only those with access.
+      foreach ($items as $key => $item) {
+        if (empty($item['access'])) {
+          unset($items[$key]);
+        }
+      }
+
+      foreach ($items as $delta => $item) {
+        $entity = clone $item['entity'];
+        unset($entity->content);
+        $result[$delta] = entity_view($field['settings']['target_type'], array($item['target_id'] => $entity), $settings['view_mode'], $langcode, FALSE);
+
+        if (empty($settings['links']) && isset($result[$delta][$field['settings']['target_type']][$item['target_id']]['links'])) {
+          $result[$delta][$field['settings']['target_type']][$item['target_id']]['links']['#access'] = FALSE;
+        }
+      }
+      break;
+
+    case 'random_image_image':
+      // For image field type we use view formatter from image module.
+      $result = image_field_formatter_view($entity_type, $entity, $field, $instance, $langcode, $items, $display);
+      break;
+  }
+
+  return $result;
+}

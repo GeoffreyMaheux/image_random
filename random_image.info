@@ -1,0 +1,5 @@
+name = Random Image Formatter
+description = This module adds field formatter for rendering random image.
+core = 7.x
+
+dependencies[] = image
